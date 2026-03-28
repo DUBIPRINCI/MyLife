@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(node server/init-db.js)",
+      "Bash(npx vite:*)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //PID 14304 //F)",
+      "Bash(timeout 5 node index.js)",
+      "Bash(taskkill //PID 20660 //F)",
+      "Bash(timeout 4 node index.js)"
+    ]
+  }
+}
