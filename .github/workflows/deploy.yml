@@ -1,0 +1,107 @@
+name: 🚀 Deploy MyLife
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:          # déclenchement manuel depuis GitHub
+
+# ──────────────────────────────────────────────────────────
+#  Chemins sur le serveur
+# ──────────────────────────────────────────────────────────
+env:
+  WEB_PATH: /var/www/mylife.dubiprinci.fr/html
+  API_PATH: /var/www/mylife.dubiprinci.fr/api
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 0. Récupération du code ─────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 1. Build Frontend ───────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install & Build Frontend
+        run: |
+          cd client
+          npm ci
+          npm run build
+
+      # ── 2. Copie Frontend → Serveur ─────────────────────────────────
+      - name: Copy Frontend → Server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key:      ${{ secrets.SSH_KEY }}
+          port:     ${{ secrets.PORT }}
+          source:        "client/dist/"
+          target:        ${{ env.WEB_PATH }}
+          strip_components: 2          # supprime "client/dist/" du chemin
+
+      # ── 3. Copie Backend → Serveur ──────────────────────────────────
+      #  .env, uploads/ et node_modules sont dans .gitignore
+      #  → jamais présents dans le checkout → jamais écrasés sur le serveur
+      - name: Copy Backend → Server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:     ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key:      ${{ secrets.SSH_KEY }}
+          port:     ${{ secrets.PORT }}
+          source:        "server/"
+          target:        ${{ env.API_PATH }}
+          strip_components: 1          # supprime "server/" du chemin
+
+      # ── 4. Configurer le .env & Redémarrer PM2 ─────────────────────
+      - name: Configure .env & Restart API
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key:      ${{ secrets.SSH_KEY }}
+          port:     ${{ secrets.PORT }}
+          script: |
+            set -e
+
+            # ── Dossiers (1ère fois uniquement) ──────────────────────
+            mkdir -p /var/www/mylife.dubiprinci.fr/api/uploads
+            mkdir -p /var/www/mylife.dubiprinci.fr/html
+
+            # ── Écriture du .env depuis les secrets GitHub ────────────
+            cat > /var/www/mylife.dubiprinci.fr/api/.env << 'ENVEOF'
+            PORT=3001
+            NODE_ENV=production
+            CLIENT_URL=https://mylife.dubiprinci.fr
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            JWT_EXPIRES_IN=7d
+            DB_HOST=localhost
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_NAME=mylife
+            DB_PORT=3306
+            ENVEOF
+
+            chmod 600 /var/www/mylife.dubiprinci.fr/api/.env
+
+            # ── Installation des dépendances (prod seulement) ─────────
+            cd /var/www/mylife.dubiprinci.fr/api
+            npm install --omit=dev
+
+            # ── Démarrage / redémarrage PM2 ───────────────────────────
+            pm2 restart mylife-api \
+              || pm2 start ecosystem.config.cjs \
+                   --env production \
+                   --update-env
+            pm2 save
+
+            echo "✅ Déploiement terminé"
